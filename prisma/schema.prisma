@@ -1,0 +1,188 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------
+// AUTHENTICATION & ACCESS CONTROL
+// -----------------------------------------------------------------
+
+enum AdminRole {
+  super_admin
+  election_officer
+}
+
+model AdminUser {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  role          AdminRole      @default(election_officer)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  RefreshTokens RefreshToken[]
+  AdminTokens   AdminToken[]
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  adminId   String
+  admin     AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revoked   Boolean   @default(false)
+  createdAt DateTime  @default(now())
+}
+
+model AdminToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  adminId   String
+  admin     AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+}
+
+// -----------------------------------------------------------------
+// ELECTION SETUP
+// -----------------------------------------------------------------
+
+enum ElectionStatus {
+  draft
+  open
+  closed
+  results_published
+}
+
+model Election {
+  id           String         @id @default(uuid())
+  title        String
+  description  String?
+  startTime    DateTime?
+  endTime      DateTime?
+  status       ElectionStatus @default(draft)
+  configLocked Boolean        @default(false)
+  publicKey    String?
+  privateKey   String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  Positions    Position[]
+  Voters       Voter[]
+  VoteRecords  VoteRecord[]
+}
+
+enum CountingMethod {
+  plurality
+  simple_majority
+}
+
+enum MajorityFallback {
+  runoff
+  plurality
+}
+
+model Position {
+  id               String            @id @default(uuid())
+  electionId       String
+  election         Election          @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  name             String
+  countingMethod   CountingMethod    @default(plurality)
+  majorityFallback MajorityFallback?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  Candidates       Candidate[]
+}
+
+model Candidate {
+  id          String   @id @default(uuid())
+  positionId  String
+  position    Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  name        String
+  photoUrl    String?
+  manifesto   String?
+  credentials String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// -----------------------------------------------------------------
+// VOTER ROLL & TOKENS
+// -----------------------------------------------------------------
+
+model Voter {
+  id         String   @id @default(uuid())
+  electionId String
+  election   Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  studentId  String
+  name       String
+  email      String
+  hasVoted   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  VoterToken       VoterToken?
+  EmailDeliveryLog EmailDeliveryLog?
+
+  @@unique([electionId, studentId])
+  @@unique([electionId, email])
+}
+
+model VoterToken {
+  id          String   @id @default(uuid())
+  voterId     String   @unique
+  voter       Voter    @relation(fields: [voterId], references: [id], onDelete: Cascade)
+  tokenHash   String
+  used        Boolean  @default(false)
+  generatedAt DateTime @default(now())
+}
+
+enum EmailDeliveryStatus {
+  pending
+  sent
+  failed
+}
+
+model EmailDeliveryLog {
+  id            String              @id @default(uuid())
+  voterId       String              @unique
+  voter         Voter               @relation(fields: [voterId], references: [id], onDelete: Cascade)
+  status        EmailDeliveryStatus @default(pending)
+  retryCount    Int                 @default(0)
+  lastAttemptAt DateTime?
+}
+
+// -----------------------------------------------------------------
+// VOTING & TALLY
+// -----------------------------------------------------------------
+
+// CRITICAL ANONYMITY RULE:
+// VoteRecord has NO foreign key to Voter or VoterToken. 
+// A vote must never be linked back to the voter identity in storage.
+model VoteRecord {
+  id               String   @id @default(uuid())
+  electionId       String
+  election         Election @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  encryptedPayload String
+  encryptedKey     String?
+  iv               String
+  hash             String   @unique
+  previousHash     String?  @unique
+  createdAt        DateTime @default(now())
+}
+
+// -----------------------------------------------------------------
+// AUDIT LOG
+// -----------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  entityType String
+  entityId   String?
+  actorId    String?  // Nullable for system actions
+  details    Json?
+  createdAt  DateTime @default(now())
+}
