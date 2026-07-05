@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateElectionDto } from './dto/create-election.dto';
 import { UpdateElectionDto } from './dto/update-election.dto';
@@ -86,7 +86,35 @@ export class ElectionService {
   }
 
   async findOne(id: string) {
-    const election = await this.prisma.election.findUnique({
+    let election = await this.prisma.election.findUnique({
+      where: { id },
+    });
+
+    if (!election) {
+      throw new NotFoundException(`Election with ID ${id} not found`);
+    }
+
+    const now = new Date();
+    let statusChanged = false;
+    let newStatus = election.status;
+
+    if (election.status === 'draft' && election.startTime && now >= election.startTime && (!election.endTime || now < election.endTime)) {
+      newStatus = 'open';
+      statusChanged = true;
+    } else if (election.status === 'open' && election.endTime && now >= election.endTime) {
+      newStatus = 'closed';
+      statusChanged = true;
+    }
+
+    if (statusChanged) {
+      election = await this.prisma.election.update({
+        where: { id },
+        data: { status: newStatus },
+      });
+      this.logger.log(`⏰ Lazy-transitioned election status of "${election.title}" to ${newStatus}`);
+    }
+
+    return this.prisma.election.findUnique({
       where: { id },
       include: {
         Positions: {
@@ -97,12 +125,6 @@ export class ElectionService {
         },
       },
     });
-
-    if (!election) {
-      throw new NotFoundException(`Election with ID ${id} not found`);
-    }
-
-    return election;
   }
 
   async generateReport(id: string) {
@@ -178,8 +200,26 @@ export class ElectionService {
     });
   }
 
-  async remove(id: string) {
-    await this.findOne(id);
+  async remove(id: string, admin: any) {
+    const election = await this.findOne(id);
+    if (!election) {
+      throw new NotFoundException(`Election not found`);
+    }
+    
+    const isEnded = election.status === 'closed' || election.status === 'results_published';
+    if (isEnded && admin.role !== 'super_admin') {
+      const endTime = election.endTime || election.updatedAt;
+      const threeDaysInMs = 3 * 24 * 60 * 60 * 1000;
+      const deleteAllowedAfter = new Date(endTime.getTime() + threeDaysInMs);
+      if (new Date() < deleteAllowedAfter) {
+        const timeRemaining = deleteAllowedAfter.getTime() - Date.now();
+        const daysRemaining = Math.max(1, Math.ceil(timeRemaining / (24 * 60 * 60 * 1000)));
+        throw new BadRequestException(
+          `EC Officials can only delete a completed election 3 days after it has ended. Please wait ${daysRemaining} more day(s).`
+        );
+      }
+    }
+
     return this.prisma.election.delete({
       where: { id },
     });

@@ -27,13 +27,18 @@ export class ResultsService {
     // 2. Setup Results Structure
     const results: Record<string, any> = {};
     for (const position of election.Positions) {
+      const isSingle = position.Candidates.length === 1;
       results[position.id] = {
+        id: position.id,
         title: position.name,
+        isSingleCandidate: isSingle,
         candidates: position.Candidates.map(c => ({
           id: c.id,
           name: c.name,
           photoUrl: c.photoUrl,
           votes: 0,
+          yesVotes: isSingle ? 0 : undefined,
+          noVotes: isSingle ? 0 : undefined,
         })),
       };
     }
@@ -75,11 +80,24 @@ export class ResultsService {
         // c) Parse and Tally
         const selections = JSON.parse(decryptedPayload); // Format: { "positionId": "candidateId" }
 
-        for (const [positionId, candidateId] of Object.entries(selections)) {
+        for (const [positionId, selection] of Object.entries(selections)) {
           if (results[positionId]) {
-            const candidate = results[positionId].candidates.find((c: any) => c.id === candidateId);
-            if (candidate) {
-              candidate.votes += 1;
+            const isSingle = results[positionId].isSingleCandidate;
+            if (isSingle) {
+              const candidate = results[positionId].candidates[0];
+              if (candidate) {
+                if (selection === candidate.id) {
+                  candidate.votes += 1;
+                  candidate.yesVotes += 1;
+                } else if (typeof selection === 'string' && selection.startsWith('NO_')) {
+                  candidate.noVotes += 1;
+                }
+              }
+            } else {
+              const candidate = results[positionId].candidates.find((c: any) => c.id === selection);
+              if (candidate) {
+                candidate.votes += 1;
+              }
             }
           }
         }
@@ -93,7 +111,13 @@ export class ResultsService {
     // 5. Calculate totals and sort by highest votes
     const finalPositions = Object.values(results).map((pos: any) => {
       pos.candidates.sort((a: any, b: any) => b.votes - a.votes);
-      const totalVotes = pos.candidates.reduce((sum: number, c: any) => sum + c.votes, 0);
+      let totalVotes = 0;
+      if (pos.isSingleCandidate && pos.candidates.length === 1) {
+        const c = pos.candidates[0];
+        totalVotes = (c.yesVotes || 0) + (c.noVotes || 0);
+      } else {
+        totalVotes = pos.candidates.reduce((sum: number, c: any) => sum + c.votes, 0);
+      }
       return {
         ...pos,
         totalVotes,

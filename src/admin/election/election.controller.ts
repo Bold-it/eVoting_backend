@@ -37,7 +37,7 @@ export class ElectionController {
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.electionService.remove(id);
+  remove(@Param('id') id: string, @CurrentAdmin() admin: any) {
+    return this.electionService.remove(id, admin);
   }
 }

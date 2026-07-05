@@ -12,7 +12,34 @@ export class VotingService {
   ) {}
 
   async getBallot(electionId: string) {
-    const election = await this.prisma.election.findUnique({
+    let election = await this.prisma.election.findUnique({
+      where: { id: electionId },
+    });
+
+    if (!election) throw new BadRequestException('Election not found');
+
+    const now = new Date();
+    let statusChanged = false;
+    let newStatus = election.status;
+
+    if (election.status === 'draft' && election.startTime && now >= election.startTime && (!election.endTime || now < election.endTime)) {
+      newStatus = 'open';
+      statusChanged = true;
+    } else if (election.status === 'open' && election.endTime && now >= election.endTime) {
+      newStatus = 'closed';
+      statusChanged = true;
+    }
+
+    if (statusChanged) {
+      election = await this.prisma.election.update({
+        where: { id: electionId },
+        data: { status: newStatus },
+      });
+    }
+
+    if (election.status !== 'open') throw new BadRequestException('Election is not currently open');
+
+    return this.prisma.election.findUnique({
       where: { id: electionId },
       select: {
         id: true,
@@ -36,11 +63,6 @@ export class VotingService {
         },
       },
     });
-
-    if (!election) throw new BadRequestException('Election not found');
-    if (election.status !== 'open') throw new BadRequestException('Election is not currently open');
-
-    return election;
   }
 
   async castVote(voterId: string, electionId: string, castVoteDto: CastVoteDto) {
@@ -54,11 +76,32 @@ export class VotingService {
       if (!voter) throw new BadRequestException('Voter not found');
       if (voter.hasVoted) throw new BadRequestException('Voter has already cast their ballot');
 
-      const election = await tx.election.findUnique({
+      let election = await tx.election.findUnique({
         where: { id: electionId },
       });
 
-      if (!election || election.status !== 'open') {
+      if (!election) throw new BadRequestException('Election not found');
+
+      const now = new Date();
+      let statusChanged = false;
+      let newStatus = election.status;
+
+      if (election.status === 'draft' && election.startTime && now >= election.startTime && (!election.endTime || now < election.endTime)) {
+        newStatus = 'open';
+        statusChanged = true;
+      } else if (election.status === 'open' && election.endTime && now >= election.endTime) {
+        newStatus = 'closed';
+        statusChanged = true;
+      }
+
+      if (statusChanged) {
+        election = await tx.election.update({
+          where: { id: electionId },
+          data: { status: newStatus },
+        });
+      }
+
+      if (election.status !== 'open') {
         throw new BadRequestException('Election is not open for voting');
       }
 
